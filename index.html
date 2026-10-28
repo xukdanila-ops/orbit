@@ -1,1 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbit - Social Network</title>
+    <!-- Подключение PocketBase -->
+    <script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.3/dist/pocketbase.umd.js"></script>
+    <style>
+        body { margin: 0; padding: 20px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #fff; }
+        /* Эффект Glassmorphism */
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); border-radius: 15px; padding: 20px; margin-bottom: 20px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        input, button, select, textarea { width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 12px; border-radius: 8px; border: none; font-size: 16px; outline: none; }
+        input, select, textarea { background: rgba(255,255,255,0.1); color: white; }
+        input::placeholder, textarea::placeholder { color: #94a3b8; }
+        button { background: #6366f1; color: white; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #4f46e5; }
+        .btn-outline { background: transparent; border: 1px solid #6366f1; }
+        .btn-outline:hover { background: rgba(99, 102, 241, 0.1); }
+        .btn-danger { background: #ef4444; width: auto; padding: 6px 12px; font-size: 12px; float: right; margin-left: 10px; }
+        .hidden { display: none; }
+        .post { border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px; margin-bottom: 15px; }
+        .toast { position: fixed; top: 20px; right: 20px; background: #ef4444; padding: 15px; border-radius: 8px; display: none; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .date-text { font-size: 12px; color: #64748b; margin-left: 10px; }
+    </style>
+</head>
+<body>
 
+<div id="toast" class="toast"></div>
+
+<!-- Экран авторизации -->
+<div id="auth-screen" class="container glass">
+    <h2 id="auth-title">Вход в Orbit</h2>
+    <input type="email" id="email" placeholder="Email">
+    <input type="password" id="password" placeholder="Пароль (минимум 8 символов)">
+    <button onclick="login()">Войти</button>
+    <button class="btn-outline" onclick="register()">Регистрация</button>
+    
+    <select id="lang" onchange="changeLang()">
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+        <option value="uk">Українська</option>
+    </select>
+</div>
+
+<!-- Главный экран приложения -->
+<div id="app-screen" class="container hidden">
+    <div class="glass" style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin:0;">Orbit <span id="admin-badge" class="hidden" style="color: gold; font-size: 14px; margin-left: 10px;">[Head Admin]</span></h3>
+        <button class="btn-outline" onclick="logout()" style="width: auto; margin: 0; padding: 8px 15px;">Выйти</button>
+    </div>
+
+    <div class="glass">
+        <textarea id="post-text" placeholder="Что нового?" rows="3" style="resize: none;"></textarea>
+        <button onclick="createPost()">Опубликовать</button>
+        <button class="btn-outline" onclick="loadPosts()">Обновить ленту сообщений</button>
+    </div>
+
+    <div id="feed" class="glass"></div>
+</div>
+
+<script>
+    // Подключение к вашей базе данных
+    const pb = new PocketBase('https://smaller-nearest.pockethost.io');
+    let isAdmin = false;
+
+    const ui = {
+        authScreen: document.getElementById('auth-screen'),
+        appScreen: document.getElementById('app-screen'),
+        adminBadge: document.getElementById('admin-badge'),
+        feed: document.getElementById('feed'),
+        toast: document.getElementById('toast')
+    };
+
+    // Всплывающие уведомления
+    function showToast(msg, isError = true) {
+        ui.toast.textContent = msg;
+        ui.toast.style.background = isError ? '#ef4444' : '#10b981';
+        ui.toast.style.display = 'block';
+        setTimeout(() => ui.toast.style.display = 'none', 3000);
+    }
+
+    // Проверка авторизации и выдача админки
+    function checkAuth() {
+        if (pb.authStore.isValid) {
+            // Если почта совпадает, выдаем права Head Admin
+            isAdmin = pb.authStore.model.email === 'xukdanila@gmail.com';
+            ui.authScreen.classList.add('hidden');
+            ui.appScreen.classList.remove('hidden');
+            if (isAdmin) {
+                ui.adminBadge.classList.remove('hidden');
+            } else {
+                ui.adminBadge.classList.add('hidden');
+            }
+            loadPosts();
+        } else {
+            ui.authScreen.classList.remove('hidden');
+            ui.appScreen.classList.add('hidden');
+        }
+    }
+
+    // Логика входа
+    async function login() {
+        try {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            await pb.collection('users').authWithPassword(email, password);
+            checkAuth();
+        } catch (err) {
+            showToast('Ошибка входа. Проверьте почту и пароль.');
+        }
+    }
+
+    // Логика регистрации
+    async function register() {
+        try {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            if (password.length < 8) return showToast('Пароль должен быть от 8 символов.');
+            
+            await pb.collection('users').create({
+                email: email,
+                password: password,
+                passwordConfirm: password
+            });
+            showToast('Регистрация успешна! Входим...', false);
+            await login();
+        } catch (err) {
+            showToast('Ошибка регистрации. Возможно, такой email уже есть.');
+        }
+    }
+
+    // Выход из аккаунта
+    function logout() {
+        pb.authStore.clear();
+        isAdmin = false;
+        checkAuth();
+    }
+
+    // Создание нового поста (сообщения)
+    async function createPost() {
+        const text = document.getElementById('post-text').value;
+        if (!text) return;
+        try {
+            await pb.collection('posts').create({
+                content: text,
+                author_email: pb.authStore.model.email
+            });
+            document.getElementById('post-text').value = '';
+            loadPosts();
+        } catch (err) {
+            showToast('Ошибка публикации. Проверьте права API Rules в PocketBase.');
+        }
+    }
+
+    // Загрузка ленты сообщений
+    async function loadPosts() {
+        try {
+            const records = await pb.collection('posts').getFullList({ sort: '-created' });
+            ui.feed.innerHTML = records.map(post => `
+                <div class="post">
+                    <strong style="color: #a5b4fc;">${post.author_email}</strong>
+                    <span class="date-text">${new Date(post.created).toLocaleString()}</span>
+                    ${isAdmin ? `<button class="btn-danger" onclick="deletePost('${post.id}')">Удалить</button>` : ''}
+                    <p style="margin: 10px 0 0 0; line-height: 1.5;">${post.content}</p>
+                </div>
+            `).join('');
+        } catch (err) {
+            ui.feed.innerHTML = '<p style="text-align:center; color:#94a3b8;">Лента пуста или нет доступа к постам.</p>';
+        }
+    }
+
+    // Удаление поста (только для Head Admin)
+    async function deletePost(id) {
+        if(!confirm('Вы уверены, что хотите удалить это сообщение?')) return;
+        try {
+            await pb.collection('posts').delete(id);
+            loadPosts();
+        } catch (err) {
+            showToast('Ошибка удаления.');
+        }
+    }
+
+    // Смена языка интерфейса
+    function changeLang() {
+        const lang = document.getElementById('lang').value;
+        const titles = { ru: 'Вход в Orbit', en: 'Login to Orbit', uk: 'Вхід до Orbit' };
+        document.getElementById('auth-title').innerText = titles[lang];
+    }
+
+    // Проверка при загрузке страницы
+    checkAuth();
+</script>
+</body>
+</html>
